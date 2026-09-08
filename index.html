@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>無人島脱出（試作）</title>
+<style>
+:root{
+  --ink:#1E2A33; --ink-soft:#6B7A88; --line:#D7DDE3;
+  --panel:#FFFFFF; --page:#EEF2F6;
+  --gold:#EFB01F; --gold-deep:#A8790C;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; padding:16px 12px 40px;
+  background:var(--page); color:var(--ink);
+  font-family:"Hiragino Sans","Noto Sans JP",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:400px;margin:0 auto}
+h1{font-size:18px;font-weight:600;margin:0 0 12px;letter-spacing:.02em}
+.stage{background:var(--panel);border-radius:14px;padding:8px;border:1px solid var(--line)}
+canvas{width:100%;display:block;border-radius:10px;touch-action:none}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.stat b{display:block;font-size:12px;font-weight:400;color:var(--ink-soft)}
+.stat span{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.tools{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--ink-soft)}
+#dbg{display:none;margin-top:8px;padding:10px 12px;background:var(--panel);
+  border:1px solid var(--line);border-radius:10px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  line-height:1.6;white-space:pre-wrap;color:var(--ink-soft)}
+p.note{font-size:13px;line-height:1.7;color:var(--ink-soft);margin:12px 0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>無人島脱出（試作）</h1>
+
+<div class="stage"><canvas id="cv" width="360" height="576"></canvas></div>
+
+<div class="stats">
+  <div class="stat"><b>所持金</b><span id="s-coin">0</span></div>
+  <div class="stat"><b>兵士</b><span id="s-unit">0</span></div>
+  <div class="stat"><b>肉の単価</b><span id="s-val">5</span></div>
+  <div class="stat"><b>脱出条件</b><span id="s-esc">0 / 11</span></div>
+</div>
+
+<label class="tools"><input type="checkbox" id="dbgck"> デバッグ表示</label>
+<div id="dbg">起動中</div>
+
+<p class="note">画面をドラッグして移動。柵の外でクマに触れると戦闘。肉を厨房に降ろすとコインが出ます。丸の上に少し留まると投資が進みます。</p>
+</div>
+
+<script>
+(function(){
+var cv=document.getElementById("cv"),cx=cv.getContext("2d");
+var W=360,H=576,FENCE=290;
+var MEAT="#8A4B22",MEAT2="#5E3116",GOLD="#EFB01F",GOLD2="#A8790C";
+
+var p={x:180,y:370,tx:180,ty:370,hp:100,hpmax:100,cap:3,carry:0,dead:0};
+var coin=0,val=5,scap=2,wep=0,med=0,trade=0,prc=0,wat=0,trp=0,wal=0,won=false;
+var bears=[],raids=[],meats=[],golds=[],pop=[],sold=[],vill=[{a:0.5}],grave=[];
+
+var TIER=[
+ {y0:196,y1:274,hp:40, at:2, m:2,r:15,c:"#FFFFFF",n:"シロクマ", tg:3},
+ {y0:100,y1:186,hp:95, at:5, m:3,r:18,c:"#EDE7DC",n:"大グマ",   tg:3},
+ {y0:22, y1:90, hp:190,at:10,m:5,r:22,c:"#D6CCBC",n:"氷牙グマ", tg:2}
+];
+var kitchen={x:56,y:346,r:34};
+var pads=[
+ {id:"val",x:150,y:346,n:"厨房",    lv:0,prog:0,dw:0,base:12},
+ {id:"prc",x:232,y:346,n:"加工場",  lv:0,prog:0,dw:0,base:30},
+ {id:"tra",x:314,y:346,n:"訓練所",  lv:0,prog:0,dw:0,base:16},
+ {id:"wep",x:48, y:432,n:"兵器開発",lv:0,prog:0,dw:0,base:22},
+ {id:"cap",x:136,y:432,n:"倉庫",    lv:0,prog:0,dw:0,base:14},
+ {id:"med",x:224,y:432,n:"医療",    lv:0,prog:0,dw:0,base:20},
+ {id:"trd",x:312,y:432,n:"交易所",  lv:0,prog:0,dw:0,base:26},
+ {id:"wat",x:48, y:516,n:"見張り台",lv:0,prog:0,dw:0,base:18},
+ {id:"trp",x:136,y:516,n:"罠場",    lv:0,prog:0,dw:0,base:24},
+ {id:"wal",x:224,y:516,n:"防壁",    lv:0,prog:0,dw:0,base:28},
+ {id:"dck",x:312,y:516,n:"船着き場",lv:0,prog:0,dw:0,base:40}
+];
+var PR=24;
+
+function cost(pa){return pa.base*(pa.lv+1)}
+function total(){var n=0;for(var i=0;i<pads.length;i++)n+=pads[i].lv;return n}
+function ready(){var n=0;for(var i=0;i<pads.length;i++)if(pads[i].lv>=3)n++;return n}
+function patk(){return 8+wep*6}
+function satk(){return 8+wep*5}
+function unit(){return val+prc*3}
+
+var RANKN=["","新兵","古参","精鋭"],RANKC=["","#1D9E75","#1F7FA8","#7A4FC0"];
+var RANKX=[0,0,8,24];
+function rankOf(k){return k>=RANKX[3]?3:(k>=RANKX[2]?2:1)}
+function shp(u){return 60+med*30+(u.lv-1)*20}
+function depth(u){return u.lv>=3?18:(u.lv>=2?96:192)}
+function frontier(){var d=1e9;for(var i=0;i<sold.length;i++)d=Math.min(d,depth(sold[i]));return d}
+function mkSold(k){var u={x:180,y:360,carry:0,t2:0,hp:0,rest:0,dump:0,kills:k||0,lv:1};
+ u.lv=rankOf(u.kills);u.hp=shp(u);return u}
+function gain(u){u.kills++;var nl=rankOf(u.kills);
+ if(nl>u.lv){u.lv=nl;u.hp=shp(u);fx(u.x,u.y-34,"昇格 "+RANKN[nl],"#185FA5")}}
+
+function mk(t){var T=TIER[t],bx=180,by=(T.y0+T.y1)/2,bd=-1;
+ for(var k=0;k<6;k++){
+  var x=24+Math.random()*312,y=T.y0+Math.random()*(T.y1-T.y0),d=1e9;
+  if(p.dead===0)d=d2(p.x,p.y,x,y);
+  for(var s=0;s<sold.length;s++)d=Math.min(d,d2(sold[s].x,sold[s].y,x,y));
+  if(d>bd){bd=d;bx=x;by=y}
+  if(bd>150)break}
+ return{t:t,x:bx,y:by,hp:T.hp,hpmax:T.hp,vx:0,vy:0,w:0,ck:0}}
+function mkRaid(t){var T=TIER[t];return{t:t,x:40+Math.random()*280,y:-20,
+ hp:T.hp,hpmax:T.hp,vx:0,vy:0,w:0,ck:0}}
+
+var tick=0,dep=0,raidT=0,warn=0,raidN=0,drag=false;
+var scd=[0,0,0],ghost=0;
+
+function pos(e){var r=cv.getBoundingClientRect();
+ if(!(r.width>0&&r.height>0))return{x:p.x,y:p.y};
+ return{x:(e.clientX-r.left)/r.width*W,y:(e.clientY-r.top)/r.height*H}}
+cv.addEventListener("pointerdown",function(e){drag=true;cv.setPointerCapture(e.pointerId);
+ var q=pos(e);p.tx=q.x;p.ty=q.y;e.preventDefault()});
+cv.addEventListener("pointermove",function(e){if(!drag)return;var q=pos(e);p.tx=q.x;p.ty=q.y});
+cv.addEventListener("pointerup",function(){drag=false});
+document.getElementById("dbgck").addEventListener("change",function(e){
+ document.getElementById("dbg").style.display=e.target.checked?"block":"none"});
+
+function d2(a,b,c,d){var x=a-c,y=b-d;return Math.sqrt(x*x+y*y)}
+function fx(x,y,t,col){pop.push({x:x,y:y,t:t,c:col,l:60})}
+function fin(v,dv){return isFinite(v)?v:dv}
+function seek(u,tx,ty,sp,keep){var dx=tx-u.x,dy=ty-u.y,d=Math.sqrt(dx*dx+dy*dy),go=d-(keep||0);
+ if(d>1&&go>0.01){var st=Math.min(sp,go);u.x+=dx/d*st;u.y+=dy/d*st}return d}
+function count(t){var n=0;for(var i=0;i<bears.length;i++)if(bears[i].t===t)n++;return n}
+function nearBear(x,y,minY){var b=null,bd=1e9,src=bears.concat(raids);
+ for(var i=0;i<src.length;i++){var e=src[i];if(minY!==undefined&&e.y<minY)continue;
+  var d=d2(x,y,e.x,e.y);if(d<bd){bd=d;b=e}}return b}
+function nearMeat(x,y){var m=-1,md=1e9;
+ for(var i=0;i<meats.length;i++){var d=d2(x,y,meats[i].x,meats[i].y);if(d<md){md=d;m=i}}return m}
+function dropMeat(x,y,n){x=fin(x,180);y=fin(y,240);for(var k=0;k<n;k++)meats.push({
+ x:Math.max(16,Math.min(W-16,x+(Math.random()-0.5)*34)),
+ y:Math.max(20,Math.min(H-20,y+(Math.random()-0.5)*34))})}
+function payout(n,ox){for(var g=0;g<n;g++){var a=Math.random()*6.3,rr=16+Math.random()*30;
+ golds.push({x:kitchen.x+ox,y:kitchen.y,gx:kitchen.x+ox+Math.cos(a)*rr,
+  gy:kitchen.y+Math.sin(a)*rr,t:0,life:0,ph:Math.random()*6.3})}}
+function kill(arr,idx,e){var T=TIER[e.t];dropMeat(e.x,e.y,T.m);
+ fx(e.x,e.y-30,"肉 x"+T.m,MEAT2);arr.splice(idx,1)}
+
+function hitTargets(e,T,isRaid){
+ var tgt=null,td=1e9,band=isRaid?1e9:70,reach=isRaid?H:T.y1+T.r+15;
+ if(p.dead===0&&p.y<=reach&&Math.abs(p.y-e.y)<band){var d0=d2(p.x,p.y,e.x,e.y);if(d0<110){tgt=p;td=d0}}
+ for(var s=0;s<sold.length;s++){if(sold[s].y>reach||Math.abs(sold[s].y-e.y)>band)continue;
+  var d1=d2(sold[s].x,sold[s].y,e.x,e.y);if(d1<110&&d1<td){tgt=sold[s];td=d1}}
+ if(tgt&&td>0.5){e.vx=(tgt.x-e.x)/td*1.15;e.vy=(tgt.y-e.y)/td*1.15}
+ else if(tgt){e.vx=0;e.vy=0}
+ e.ck--;
+ if(tgt&&td<T.r+15&&e.ck<=0){e.ck=36;
+  if(tgt===p){p.hp-=T.at;fx(p.x,p.y-26,"-"+T.at,"#A32D2D");
+   if(p.hp<=0){p.hp=0;p.dead=80;p.carry=0;fx(p.x,p.y-40,"拠点に運ばれた","#A32D2D")}}
+  else{tgt.hp-=T.at;
+   if(tgt.hp<=0){for(var z=0;z<sold.length;z++)if(sold[z]===tgt){
+     dropMeat(tgt.x,tgt.y,tgt.carry);sold.splice(z,1);break}
+    fx(e.x,e.y-34,"兵士がやられた","#A32D2D");
+    if(med>0)grave.push({t:260,k:Math.floor(tgt.kills/2)})}}}
+ if(p.dead===0&&d2(p.x,p.y,e.x,e.y)<T.r+17&&tick%16===0){
+  e.hp-=patk();fx(e.x,e.y-T.r-12,"-"+patk(),"#7A2020")}
+ return tgt}
+
+function step(){
+ tick++;
+ for(var t=0;t<3;t++){var TT=TIER[t],lack=TT.tg-count(t);
+  if(lack<=0){scd[t]=0;continue}
+  if(scd[t]>0){scd[t]--;continue}
+  bears.push(mk(t));scd[t]=lack>=TT.tg?15:45}
+
+ var TL=total();
+ if(TL>=10){
+  if(raidT<=0&&warn<=0){warn=180;fx(180,FENCE-50,"クマの群れが近づいている","#993C1D")}
+  else if(warn>0){warn--;
+   if(warn===0){var rt=TL<22?0:(TL<38?1:2),rn=1+Math.floor(TL/22);
+    for(var r0=0;r0<rn;r0++)raids.push(mkRaid(rt));
+    raidN++;raidT=3600}}
+  else raidT--;
+ }
+
+ seek(p,p.tx,p.ty,3.3);
+ p.x=Math.max(12,Math.min(W-12,p.x));p.y=Math.max(12,Math.min(H-12,p.y));
+ if(p.dead>0){p.dead--;if(p.dead===0){p.hp=p.hpmax;p.x=180;p.y=370;p.tx=180;p.ty=370}}
+ else if(p.y>FENCE&&tick%30===0&&p.hp<p.hpmax)p.hp=Math.min(p.hpmax,p.hp+2);
+
+ for(var i=bears.length-1;i>=0;i--){var b=bears[i],T=TIER[b.t];
+  b.w--;
+  if(b.w<=0){b.w=60+Math.random()*60;b.vx=(Math.random()-0.5)*1.3;b.vy=(Math.random()-0.5)*1.3}
+  hitTargets(b,T,false);
+  b.x+=fin(b.vx,0);b.y+=fin(b.vy,0);
+  if(!isFinite(b.x)||!isFinite(b.y)){var s0=mk(b.t);b.x=s0.x;b.y=s0.y;b.vx=0;b.vy=0;b.w=0;ghost++}
+  b.x=Math.max(20,Math.min(W-20,b.x));b.y=Math.max(T.y0,Math.min(T.y1,b.y));
+  if(b.hp<=0)kill(bears,i,b)}
+
+ for(var i2=raids.length-1;i2>=0;i2--){var q0=raids[i2],T2=TIER[q0.t];
+  var got=hitTargets(q0,T2,true);
+  if(!got){var lim=wal>0?FENCE-32:H-40;
+   if(q0.y<lim)seek(q0,kitchen.x,Math.min(kitchen.y,lim),1.1);
+   else if(d2(q0.x,q0.y,kitchen.x,kitchen.y)<kitchen.r&&tick%40===0){
+    var st=Math.min(coin,3);coin-=st;fx(kitchen.x,kitchen.y-52,"蓄えを奪われた -"+st,"#A32D2D")}}
+  else{q0.x+=fin(q0.vx,0);q0.y+=fin(q0.vy,0)}
+  if(!isFinite(q0.x)||!isFinite(q0.y)){q0.x=40+Math.random()*280;q0.y=40;q0.vx=0;q0.vy=0;ghost++}
+  q0.x=Math.max(20,Math.min(W-20,q0.x));q0.y=Math.min(wal>0?FENCE-32:H-40,q0.y);
+  if(q0.hp<=0)kill(raids,i2,q0)}
+
+ if(trp>0&&tick%Math.max(100,320-trp*45)===0)
+  dropMeat(40+Math.random()*280,215+Math.random()*55,1);
+
+ for(var s=0;s<sold.length;s++){var u=sold[s],umax=shp(u);
+  if(u.y>FENCE&&u.hp<umax&&tick%12===0)u.hp=Math.min(umax,u.hp+2+med*2);
+  if(u.hp<umax*0.35)u.rest=1;
+  if(u.rest&&u.hp>=umax*0.85)u.rest=0;
+  if(u.rest){seek(u,140,FENCE+50,2.2);continue}
+  if(u.carry>=scap)u.dump=1;
+  if(u.carry<=0)u.dump=0;
+  if(u.dump){
+   if(seek(u,kitchen.x,kitchen.y,2.1)<kitchen.r-6){u.t2++;
+    if(u.t2>=14){u.t2=0;u.carry--;payout(unit(),18)}}
+   continue}
+  var mi=nearMeat(u.x,u.y);
+  if(mi>=0&&meats[mi].y>=depth(u)-40){
+   if(seek(u,meats[mi].x,meats[mi].y,2.3)<14){meats.splice(mi,1);u.carry++}continue}
+  var tb=nearBear(u.x,u.y,depth(u));
+  if(tb){var dd=seek(u,tb.x,tb.y,2.2,TIER[tb.t].r+10);
+   if(dd<TIER[tb.t].r+17&&tick%12===(s*2)%12){
+    tb.hp-=satk();fx(tb.x,tb.y-30,"-"+satk(),"#0F6E56");
+    if(tb.hp<=0&&!tb.done){tb.done=1;gain(u)}}}
+  else seek(u,180,FENCE-50,1.6)}
+
+ for(var gv=grave.length-1;gv>=0;gv--){grave[gv].t--;
+  if(grave[gv].t<=0){var rv=mkSold(grave[gv].k);grave.splice(gv,1);
+   sold.push(rv);fx(224,424,"兵士が回復した "+RANKN[rv.lv],"#0F6E56")}}
+
+ if(trade>0&&tick%300===0){var inc=trade*4;coin+=inc;fx(312,424,"交易 +"+inc,GOLD2)}
+
+ for(var m=meats.length-1;m>=0;m--)
+  if(p.carry<p.cap&&d2(p.x,p.y,meats[m].x,meats[m].y)<22){meats.splice(m,1);p.carry++}
+
+ if(p.carry>0&&d2(p.x,p.y,kitchen.x,kitchen.y)<kitchen.r){
+  dep++;if(dep>=12){dep=0;p.carry--;payout(unit(),0);
+   fx(kitchen.x,kitchen.y-46,"住民が食べた","#5F5E5A")}}
+
+ for(var c2=golds.length-1;c2>=0;c2--){var G=golds[c2];G.life++;
+  if(G.t<14){G.t++;G.x+=(G.gx-G.x)*0.22;G.y+=(G.gy-G.y)*0.22}
+  else{var dd2=d2(p.x,p.y,G.x,G.y);
+   if(dd2<62){G.x+=(p.x-G.x)*0.18;G.y+=(p.y-G.y)*0.18}
+   if(dd2<16||G.life>200){golds.splice(c2,1);coin++;continue}}}
+
+ for(var j=0;j<pads.length;j++){var pa=pads[j];
+  var on=p.dead===0&&d2(p.x,p.y,pa.x,pa.y)<PR;
+  pa.dw=on?Math.min(20,pa.dw+1):0;
+  if(pa.id==="dck"&&ready()<10)continue;
+  if(pa.dw>=14&&coin>0&&tick%4===0){
+   var need=cost(pa),per=Math.min(coin,Math.max(1,Math.ceil(need/40)),need-pa.prog);
+   coin-=per;pa.prog+=per;
+   if(pa.prog>=cost(pa)){pa.prog=0;pa.lv++;
+    if(pa.id==="tra"){sold.push(mkSold(0));
+     fx(pa.x,pa.y-38,"新兵が加わった","#185FA5")}
+    if(pa.id==="wep"){wep++;fx(pa.x,pa.y-38,"攻撃 自分"+patk()+" 兵士"+satk(),"#185FA5")}
+    if(pa.id==="cap"){p.cap++;scap++;fx(pa.x,pa.y-38,"運搬 +1","#185FA5")}
+    if(pa.id==="val"){val+=2;vill.push({a:Math.random()*6.3});
+     fx(pa.x,pa.y-38,"住民増 単価"+unit(),"#185FA5")}
+    if(pa.id==="prc"){prc++;fx(pa.x,pa.y-38,"干し肉 単価"+unit(),"#185FA5")}
+    if(pa.id==="med"){med++;for(var q2=0;q2<sold.length;q2++)sold[q2].hp=shp(sold[q2]);
+     fx(pa.x,pa.y-38,"兵士体力 "+(60+med*30)+"〜","#185FA5")}
+    if(pa.id==="trd"){trade++;fx(pa.x,pa.y-38,"自動収入 +4","#185FA5")}
+    if(pa.id==="wat"){wat++;fx(pa.x,pa.y-38,"深部が見える","#185FA5")}
+    if(pa.id==="trp"){trp++;fx(pa.x,pa.y-38,"罠で肉が獲れる","#185FA5")}
+    if(pa.id==="wal"){wal++;fx(pa.x,pa.y-38,"柵が固くなった","#185FA5")}
+    if(pa.id==="dck"){won=true}
+   }}}
+
+ for(var q=pop.length-1;q>=0;q--){pop[q].l--;pop[q].y-=0.4;if(pop[q].l<=0)pop.splice(q,1)}
+}
+
+function meatIcon(x,y,r){
+ cx.fillStyle=MEAT;cx.beginPath();cx.ellipse(x,y,r,r*0.78,0,0,6.3);cx.fill();
+ cx.fillStyle=MEAT2;cx.beginPath();cx.ellipse(x-r*0.25,y-r*0.2,r*0.32,r*0.24,0,0,6.3);cx.fill();
+ cx.fillStyle="#EDE3D6";cx.beginPath();cx.arc(x+r*0.62,y+r*0.34,r*0.3,0,6.3);cx.fill()}
+function coinIcon(x,y,r,ph){var s=Math.abs(Math.cos(ph));
+ cx.fillStyle=GOLD2;cx.beginPath();cx.ellipse(x,y+1.5,r*(0.35+s*0.65),r,0,0,6.3);cx.fill();
+ cx.fillStyle=GOLD;cx.beginPath();cx.ellipse(x,y,r*(0.35+s*0.65),r,0,0,6.3);cx.fill()}
+function person(x,y,body,r){
+ cx.fillStyle=body;cx.beginPath();cx.arc(x,y,r,0,6.3);cx.fill();
+ cx.fillStyle="#FAC775";cx.beginPath();cx.arc(x,y-r*1.2,r*0.62,0,6.3);cx.fill()}
+function bearArt(e,raid){var T=TIER[e.t];
+ if(wat>0&&(e.t===2||raid)){cx.strokeStyle="#D4537E";cx.lineWidth=1.5;
+  cx.beginPath();cx.arc(e.x,e.y,T.r+8,0,6.3);cx.stroke()}
+ cx.fillStyle=raid?"#C9BFAE":T.c;cx.strokeStyle="#A9A79E";cx.lineWidth=1.5;
+ cx.beginPath();cx.ellipse(e.x,e.y,T.r,T.r*0.72,0,0,6.3);cx.fill();cx.stroke();
+ cx.beginPath();cx.arc(e.x+T.r*0.88,e.y-T.r*0.45,T.r*0.5,0,6.3);cx.fill();cx.stroke();
+ cx.fillStyle="#2C2C2A";cx.beginPath();cx.arc(e.x+T.r*1.1,e.y-T.r*0.55,1.8,0,6.3);cx.fill();
+ cx.fillStyle="#D3D1C7";cx.fillRect(e.x-T.r,e.y-T.r-13,T.r*2,4);
+ cx.fillStyle="#A32D2D";cx.fillRect(e.x-T.r,e.y-T.r-13,T.r*2*Math.max(0,e.hp)/e.hpmax,4)}
+function pad(pa){
+ var lock=pa.id==="dck"&&ready()<10;
+ cx.fillStyle=lock?"#E2DFD6":(pa.dw>0?"#CFE2F7":"#DEDCD4");
+ cx.beginPath();cx.arc(pa.x,pa.y,PR,0,6.3);cx.fill();
+ cx.strokeStyle=GOLD;cx.lineWidth=5;cx.lineCap="round";
+ cx.beginPath();cx.arc(pa.x,pa.y,PR-3,-1.5708,-1.5708+6.2832*(pa.prog/cost(pa)));cx.stroke();
+ cx.fillStyle="#2C2C2A";cx.font="600 10px sans-serif";cx.textAlign="center";
+ cx.fillText(pa.n,pa.x,pa.y-1);
+ cx.fillStyle=pa.lv>=3?"#3B6D11":"#5F5E5A";cx.font="10px sans-serif";
+ cx.fillText("Lv."+pa.lv,pa.x,pa.y+11);
+ cx.fillStyle=lock?"#993C1D":"#A8790C";cx.font="10px sans-serif";
+ cx.fillText(lock?"要 全Lv3":"あと "+(cost(pa)-pa.prog),pa.x,pa.y+PR+12)}
+
+function draw(){
+ cx.fillStyle="#DAE6F5";cx.fillRect(0,0,W,96);
+ cx.fillStyle="#E4ECF8";cx.fillRect(0,96,W,96);
+ cx.fillStyle="#EFF4FB";cx.fillRect(0,192,W,FENCE-192);
+ cx.fillStyle="#F4F2EB";cx.fillRect(0,FENCE,W,H-FENCE);
+ cx.fillStyle="#7C8A99";cx.font="10px sans-serif";cx.textAlign="left";
+ cx.fillText("深部  氷牙グマ",8,16);
+ cx.fillText("中層  大グマ",8,110);
+ cx.fillText("浅場  シロクマ",8,206);
+ var fr=frontier();
+ if(fr>18&&fr<1e9){cx.strokeStyle="#C2CEDC";cx.lineWidth=1;cx.setLineDash([5,5]);
+  cx.beginPath();cx.moveTo(0,fr);cx.lineTo(W,fr);cx.stroke();cx.setLineDash([]);
+  cx.fillStyle="#96A3B2";cx.textAlign="right";cx.fillText("兵士はここまで",W-8,fr-5)}
+ cx.fillStyle=wal>0?"#5E3116":"#854F0B";
+ for(var f=0;f<W;f+=16){if(f>150&&f<210)continue;
+  cx.fillRect(f,FENCE-14,8,20);if(wal>1)cx.fillRect(f,FENCE-22,8,7)}
+ cx.fillRect(0,FENCE+4,152,5);cx.fillRect(208,FENCE+4,152,5);
+
+ cx.fillStyle="#E8DFD2";cx.beginPath();cx.arc(kitchen.x,kitchen.y,kitchen.r,0,6.3);cx.fill();
+ cx.fillStyle="#8A4B22";cx.fillRect(kitchen.x-23,kitchen.y-7,46,25);
+ cx.fillStyle="#3B6D11";cx.beginPath();cx.moveTo(kitchen.x-29,kitchen.y-7);
+ cx.lineTo(kitchen.x,kitchen.y-28);cx.lineTo(kitchen.x+29,kitchen.y-7);cx.fill();
+ cx.fillStyle="#5E3116";cx.fillRect(kitchen.x-7,kitchen.y+4,14,14);
+ cx.fillStyle="#412402";cx.font="600 11px sans-serif";cx.textAlign="center";
+ cx.fillText("厨房",kitchen.x,kitchen.y+31);
+ cx.fillStyle="#5F5E5A";cx.font="10px sans-serif";
+ cx.fillText("肉を降ろす",kitchen.x,kitchen.y-38);
+ for(var v=0;v<vill.length;v++){var a=vill[v].a+tick*0.006;
+  person(kitchen.x+Math.cos(a)*(kitchen.r-6),kitchen.y+Math.sin(a)*(kitchen.r-6)+6,"#D4537E",5)}
+
+ for(var j=0;j<pads.length;j++)pad(pads[j]);
+ for(var m=0;m<meats.length;m++)meatIcon(meats[m].x,meats[m].y,7);
+ for(var g=0;g<golds.length;g++)coinIcon(golds[g].x,golds[g].y,6,golds[g].ph+tick*0.09);
+ for(var b=0;b<bears.length;b++)bearArt(bears[b],false);
+ for(var rq=0;rq<raids.length;rq++)bearArt(raids[rq],true);
+
+ for(var s=0;s<sold.length;s++){var u=sold[s];
+  person(u.x,u.y,u.rest?"#888780":RANKC[u.lv],8);
+  if(u.lv>1){cx.strokeStyle=RANKC[u.lv];cx.lineWidth=1.5;
+   cx.beginPath();cx.arc(u.x,u.y,11,0,6.3);cx.stroke()}
+  cx.fillStyle="#D3D1C7";cx.fillRect(u.x-11,u.y+12,22,3);
+  cx.fillStyle="#0F6E56";cx.fillRect(u.x-11,u.y+12,22*Math.max(0,u.hp)/shp(u),3);
+  cx.fillStyle=GOLD2;
+  for(var k=0;k<u.lv;k++){cx.beginPath();cx.arc(u.x-4+k*4,u.y+19,1.7,0,6.3);cx.fill()}
+  for(var c=0;c<u.carry;c++)meatIcon(u.x,u.y-20-c*9,5)}
+
+ if(p.dead===0){person(p.x,p.y,"#534AB7",11);
+  for(var c2=0;c2<p.carry;c2++)meatIcon(p.x,p.y-26-c2*10,6);
+  cx.fillStyle="#D3D1C7";cx.fillRect(p.x-16,p.y+16,32,4);
+  cx.fillStyle="#3B6D11";cx.fillRect(p.x-16,p.y+16,32*Math.max(0,p.hp)/p.hpmax,4)}
+ else{cx.fillStyle="#993C1D";cx.font="12px sans-serif";cx.textAlign="center";
+  cx.fillText("拠点に戻っている…",180,386)}
+
+ if(warn>0){cx.fillStyle="#A32D2D";cx.font="600 12px sans-serif";cx.textAlign="center";
+  cx.fillText("襲撃まで "+Math.ceil(warn/60)+" 秒",180,FENCE-34)}
+
+ for(var q=0;q<pop.length;q++){cx.globalAlpha=Math.min(1,pop[q].l/30);
+  cx.fillStyle=pop[q].c;cx.font="600 12px sans-serif";cx.textAlign="center";
+  cx.fillText(pop[q].t,pop[q].x,pop[q].y);cx.globalAlpha=1}
+
+ if(won){cx.fillStyle="rgba(15,110,86,0.92)";cx.fillRect(0,240,W,90);
+  cx.fillStyle="#FFFFFF";cx.font="600 18px sans-serif";cx.textAlign="center";
+  cx.fillText("船が出航した",180,278);
+  cx.font="13px sans-serif";cx.fillText("島からの脱出に成功",180,302)}
+}
+
+var dbg=document.getElementById("dbg");
+function rankTxt(){var n=[0,0,0,0],t="";
+ for(var i=0;i<sold.length;i++)n[sold[i].lv]++;
+ for(var r=1;r<=3;r++)t+=RANKN[r]+" "+n[r]+"人"+(r<3?" / ":"");
+ var d="";for(var j=0;j<sold.length&&j<4;j++)
+  d+=(j?" ":"")+"["+RANKN[sold[j].lv]+" 討伐"+sold[j].kills+
+     (sold[j].lv<3?"/"+RANKX[sold[j].lv+1]:"")+
+     " 体"+Math.ceil(sold[j].hp)+"/"+shp(sold[j])+"]";
+ return t+(d?"\n  "+d:"")}
+function loop(){
+ step();draw();
+ document.getElementById("s-coin").textContent=coin;
+ document.getElementById("s-unit").textContent=sold.length;
+ document.getElementById("s-val").textContent=unit();
+ document.getElementById("s-esc").textContent=ready()+" / 11";
+ if(dbg.style.display!=="none")dbg.textContent=
+  "クマ 浅"+count(0)+"/"+TIER[0].tg+" 中"+count(1)+"/"+TIER[1].tg+
+  " 深"+count(2)+"/"+TIER[2].tg+"  襲撃中 "+raids.length+
+  "\n湧き待ち "+scd[0]+"/"+scd[1]+"/"+scd[2]+" フレーム  座標復旧 "+ghost+"回"+
+  "\n肉 "+meats.length+"  コイン粒 "+golds.length+"  兵士 "+sold.length+"(待機"+grave.length+")"+
+  "\n施設合計Lv "+total()+"  襲撃回数 "+raidN+
+  "  次まで "+(total()<10?"未解禁":Math.ceil(Math.max(0,raidT)/60)+"秒")+
+  "\n自分 攻撃"+patk()+"  兵士 攻撃"+satk()+
+  "\n兵士ランク "+rankTxt();
+ requestAnimationFrame(loop)}
+loop();
+})();
+</script>
+</body>
+</html>
