@@ -25,7 +25,12 @@ canvas{width:100%;display:block;border-radius:10px;touch-action:none}
 .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px}
 .stat b{display:block;font-size:12px;font-weight:400;color:var(--ink-soft)}
 .stat span{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
-.tools{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--ink-soft)}
+.tools{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:13px;color:var(--ink-soft)}
+.tools label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.tools button{margin-left:auto;font:inherit;color:var(--ink-soft);background:var(--panel);
+  border:1px solid var(--line);border-radius:8px;padding:5px 10px;cursor:pointer}
+.tools button:active{background:var(--page)}
+#sv{font-variant-numeric:tabular-nums;font-size:12px}
 #dbg{display:none;margin-top:8px;padding:10px 12px;background:var(--panel);
   border:1px solid var(--line);border-radius:10px;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
@@ -46,7 +51,11 @@ p.note{font-size:13px;line-height:1.7;color:var(--ink-soft);margin:12px 0 0}
   <div class="stat"><b>脱出条件</b><span id="s-esc">0 / 11</span></div>
 </div>
 
-<label class="tools"><input type="checkbox" id="dbgck"> デバッグ表示</label>
+<div class="tools">
+  <label><input type="checkbox" id="dbgck"> デバッグ表示</label>
+  <span id="sv">自動保存</span>
+  <button type="button" id="rst">最初から</button>
+</div>
 <div id="dbg">起動中</div>
 
 <p class="note">画面をドラッグして移動。柵の外でクマに触れると戦闘。肉を厨房に降ろすとコインが出ます。丸の上に少し留まると投資が進みます。</p>
@@ -83,7 +92,7 @@ var pads=[
 ];
 var PR=24;
 
-function cost(pa){return pa.base*(pa.lv+1)}
+function cost(pa){return pa.base*(pa.lv+1)*(pa.lv+1)*(pa.lv+1)}
 function total(){var n=0;for(var i=0;i<pads.length;i++)n+=pads[i].lv;return n}
 function ready(){var n=0;for(var i=0;i<pads.length;i++)if(pads[i].lv>=3)n++;return n}
 function patk(){return 8+wep*6}
@@ -100,6 +109,13 @@ function mkSold(k){var u={x:180,y:360,carry:0,t2:0,hp:0,rest:0,dump:0,kills:k||0
  u.lv=rankOf(u.kills);u.hp=shp(u);return u}
 function gain(u){u.kills++;var nl=rankOf(u.kills);
  if(nl>u.lv){u.lv=nl;u.hp=shp(u);fx(u.x,u.y-34,"昇格 "+RANKN[nl],"#185FA5")}}
+
+function padLv(id){for(var i=0;i<pads.length;i++)if(pads[i].id===id)return pads[i].lv;return 0}
+function sync(){
+ val=5+padLv("val")*2;prc=padLv("prc");wep=padLv("wep");med=padLv("med");
+ trade=padLv("trd");wat=padLv("wat");trp=padLv("trp");wal=padLv("wal");
+ p.cap=3+padLv("cap");scap=2+padLv("cap");won=padLv("dck")>0;
+ while(vill.length<1+padLv("val"))vill.push({a:Math.random()*6.3})}
 
 function mk(t){var T=TIER[t],bx=180,by=(T.y0+T.y1)/2,bd=-1;
  for(var k=0;k<6;k++){
@@ -257,24 +273,25 @@ function step(){
   if(pa.dw>=14&&coin>0&&tick%4===0){
    var need=cost(pa),per=Math.min(coin,Math.max(1,Math.ceil(need/40)),need-pa.prog);
    coin-=per;pa.prog+=per;
-   if(pa.prog>=cost(pa)){pa.prog=0;pa.lv++;
+   if(pa.prog>=cost(pa)){pa.prog=0;pa.lv++;sync();
     if(pa.id==="tra"){sold.push(mkSold(0));
      fx(pa.x,pa.y-38,"新兵が加わった","#185FA5")}
-    if(pa.id==="wep"){wep++;fx(pa.x,pa.y-38,"攻撃 自分"+patk()+" 兵士"+satk(),"#185FA5")}
-    if(pa.id==="cap"){p.cap++;scap++;fx(pa.x,pa.y-38,"運搬 +1","#185FA5")}
-    if(pa.id==="val"){val+=2;vill.push({a:Math.random()*6.3});
-     fx(pa.x,pa.y-38,"住民増 単価"+unit(),"#185FA5")}
-    if(pa.id==="prc"){prc++;fx(pa.x,pa.y-38,"干し肉 単価"+unit(),"#185FA5")}
-    if(pa.id==="med"){med++;for(var q2=0;q2<sold.length;q2++)sold[q2].hp=shp(sold[q2]);
+    if(pa.id==="wep")fx(pa.x,pa.y-38,"攻撃 自分"+patk()+" 兵士"+satk(),"#185FA5");
+    if(pa.id==="cap")fx(pa.x,pa.y-38,"運搬 +1","#185FA5");
+    if(pa.id==="val")fx(pa.x,pa.y-38,"住民増 単価"+unit(),"#185FA5");
+    if(pa.id==="prc")fx(pa.x,pa.y-38,"干し肉 単価"+unit(),"#185FA5");
+    if(pa.id==="med"){for(var q2=0;q2<sold.length;q2++)sold[q2].hp=shp(sold[q2]);
      fx(pa.x,pa.y-38,"兵士体力 "+(60+med*30)+"〜","#185FA5")}
-    if(pa.id==="trd"){trade++;fx(pa.x,pa.y-38,"自動収入 +4","#185FA5")}
-    if(pa.id==="wat"){wat++;fx(pa.x,pa.y-38,"深部が見える","#185FA5")}
-    if(pa.id==="trp"){trp++;fx(pa.x,pa.y-38,"罠で肉が獲れる","#185FA5")}
-    if(pa.id==="wal"){wal++;fx(pa.x,pa.y-38,"柵が固くなった","#185FA5")}
-    if(pa.id==="dck"){won=true}
+    if(pa.id==="trd")fx(pa.x,pa.y-38,"自動収入 +4","#185FA5");
+    if(pa.id==="wat")fx(pa.x,pa.y-38,"深部が見える","#185FA5");
+    if(pa.id==="trp")fx(pa.x,pa.y-38,"罠で肉が獲れる","#185FA5");
+    if(pa.id==="wal")fx(pa.x,pa.y-38,"柵が固くなった","#185FA5");
+    save();
    }}}
 
  for(var q=pop.length-1;q>=0;q--){pop[q].l--;pop[q].y-=0.4;if(pop[q].l<=0)pop.splice(q,1)}
+
+ if(tick%300===0)save();
 }
 
 function meatIcon(x,y,r){
@@ -375,6 +392,40 @@ function draw(){
   cx.font="13px sans-serif";cx.fillText("島からの脱出に成功",180,302)}
 }
 
+var KEY="island-escape-v1",svEl=document.getElementById("sv");
+function save(){
+ try{
+  var d={v:1,t:(new Date()).getTime(),coin:coin,pads:[],sold:[],grave:[]};
+  for(var i=0;i<pads.length;i++)d.pads.push([pads[i].lv,pads[i].prog]);
+  for(var s=0;s<sold.length;s++)d.sold.push(sold[s].kills);
+  for(var g=0;g<grave.length;g++)d.grave.push([grave[g].t,grave[g].k]);
+  localStorage.setItem(KEY,JSON.stringify(d));
+  svEl.textContent="保存 "+(new Date()).toLocaleTimeString("ja-JP");
+ }catch(e){svEl.textContent="保存できません"}}
+function load(){
+ var raw=null,d=null;
+ try{raw=localStorage.getItem(KEY)}catch(e){svEl.textContent="保存できません";return false}
+ if(!raw)return false;
+ try{d=JSON.parse(raw)}catch(e2){return false}
+ if(!d||d.v!==1||!d.pads)return false;
+ coin=Math.max(0,d.coin|0);
+ for(var i=0;i<pads.length&&i<d.pads.length;i++){
+  pads[i].lv=Math.max(0,Math.min(99,d.pads[i][0]|0));
+  pads[i].prog=Math.max(0,Math.min(cost(pads[i])-1,d.pads[i][1]|0))}
+ sync();
+ sold=[];var ds=d.sold||[];
+ for(var s=0;s<ds.length&&s<40;s++)sold.push(mkSold(Math.max(0,ds[s]|0)));
+ grave=[];var dg=d.grave||[];
+ for(var g=0;g<dg.length&&g<40;g++)grave.push({t:Math.max(1,dg[g][0]|0),k:Math.max(0,dg[g][1]|0)});
+ return true}
+
+document.getElementById("rst").addEventListener("click",function(){
+ if(!confirm("最初からやり直します。保存した進行は消えます。よろしいですか？"))return;
+ try{localStorage.removeItem(KEY)}catch(e){}
+ location.reload()});
+document.addEventListener("visibilitychange",function(){if(document.hidden)save()});
+window.addEventListener("pagehide",function(){save()});
+
 var dbg=document.getElementById("dbg");
 function rankTxt(){var n=[0,0,0,0],t="";
  for(var i=0;i<sold.length;i++)n[sold[i].lv]++;
@@ -400,6 +451,7 @@ function loop(){
   "\n自分 攻撃"+patk()+"  兵士 攻撃"+satk()+
   "\n兵士ランク "+rankTxt();
  requestAnimationFrame(loop)}
+if(load())fx(180,332,"続きから再開","#185FA5");
 loop();
 })();
 </script>
